@@ -3,17 +3,27 @@
 import PySimpleGUI as sg
 import glob, os, tempfile, subprocess
 
+# -----------------------------------
+# 各種設定
+
+
 # Open JTalk 本体
-ojt_command = "/usr/bin/open_jtalk"
+OJT_COMMAND = "/usr/bin/open_jtalk"
 
 # 音響モデルの置き場所
-voice_dir = "/usr/share/hts-voice/"
+VOICE_DIR = "/usr/share/hts-voice/"
 
 # 辞書
-dic_dir = "/var/lib/mecab/dic/open-jtalk/naist-jdic"
+DIC_DIR = "/var/lib/mecab/dic/open-jtalk/naist-jdic"
 
-# 音声ファイルを再生するためのコマンド
-play_command = ["/usr/bin/aplay", "-q"]
+# Open JTalk が音声再生をサポートしているか
+SUPPORT_PLAY = False
+
+# 音声再生用のバッファサイズ （SUPPORT_PLAY = True 時に使用）
+AUDIO_BUFFER_SIZE = 4096
+
+# 音声ファイルを再生するためのコマンド （SUPPORT_PLAY = False 時に使用）
+PLAY_COMMAND = ["/usr/bin/aplay", "-q"]
 
 # -----------------------------------
 
@@ -43,11 +53,15 @@ param_info = [
 def splitMessage(value):
     return [n.strip() for n in value.splitlines() if n.strip()]
 
-def makeOJTCommand(values, output_file_path):
-    cmd = [ojt_command,
-           "-x", dic_dir,
-           "-m", os.path.join(voice_dir, values["-MODEL-"]),
-           "-ow", output_file_path]
+def makeOJTCommand(values, output_file_path, audio_buffer):
+    cmd = [OJT_COMMAND,
+           "-x", DIC_DIR,
+           "-m", os.path.join(VOICE_DIR, values["-MODEL-"])]
+
+    if output_file_path is not None:
+        cmd = cmd + ["-ow", output_file_path]
+    if audio_buffer is not None:
+        cmd = cmd + ["-z", str(audio_buffer)]
 
     for n in param_info:
         auto_key = "-AUTO" + n[KEY]
@@ -59,9 +73,9 @@ def makeOJTCommand(values, output_file_path):
     return cmd
 
 voice = [
-    os.path.relpath(f, voice_dir)
+    os.path.relpath(f, VOICE_DIR)
     for f
-    in glob.iglob(os.path.join(voice_dir, "**/*.htsvoice"), recursive=True)
+    in glob.iglob(os.path.join(VOICE_DIR, "**/*.htsvoice"), recursive=True)
 ]
 
 if not voice:
@@ -100,22 +114,30 @@ while True:
     if event == "再生":
         mes = splitMessage(values["-MES-"])
 
-        fd, path = tempfile.mkstemp(suffix=".wav")
-        os.close(fd)
-        try:
-            cmd = makeOJTCommand(values, path)
-
+        if SUPPORT_PLAY:
+            cmd = makeOJTCommand(values, None, AUDIO_BUFFER_SIZE)
             for m in mes:
                 c = subprocess.Popen(cmd, stdin=subprocess.PIPE)
                 c.stdin.write(m.encode('utf-8'))
                 c.stdin.close()
                 c.wait()
+        else:
+            fd, path = tempfile.mkstemp(suffix=".wav")
+            os.close(fd)
+            try:
+                cmd = makeOJTCommand(values, path, None)
 
-                c = subprocess.Popen(play_command + [path])
-                c.wait()
+                for m in mes:
+                    c = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+                    c.stdin.write(m.encode('utf-8'))
+                    c.stdin.close()
+                    c.wait()
+
+                    c = subprocess.Popen(PLAY_COMMAND + [path])
+                    c.wait()
             
-        finally:
-            os.remove(path)
+            finally:
+                os.remove(path)
         
     elif event == "保存":
         save_dir = sg.PopupGetFolder("保存先", title=TITLE)
@@ -128,7 +150,7 @@ while True:
 
                 output_path = os.path.join(save_dir,"{0}{1:03d}.wav".format(prefix, no))
                 no += 1
-                cmd = makeOJTCommand(values, output_path)
+                cmd = makeOJTCommand(values, output_path, None)
                 
                 c = subprocess.Popen(cmd, stdin=subprocess.PIPE)
                 c.stdin.write(m.encode('utf-8'))
